@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="payment_transaction_form" model="ir.ui.view">
+        <field name="name">PagoTIC Payment Transaction Form</field>
+        <field name="model">payment.transaction</field>
+        <field name="inherit_id" ref="payment.payment_transaction_form"/>
+        <field name="arch" type="xml">
+            <header position="inside">
+                <button name="action_pagotic_sync_status"
+                        type="object"
+                        string="Sync PagoTIC Status"
+                        icon="fa-refresh"
+                        invisible="provider_code != 'pagotic' or not provider_reference"/>
+            </header>
+            <field name="provider_reference" position="after">
+                <field name="pagotic_status"
+                       invisible="provider_code != 'pagotic' or not pagotic_status"/>
+                <field name="pagotic_status_detail"
+                       invisible="provider_code != 'pagotic' or not pagotic_status_detail"/>
+                <field name="pagotic_form_url"
+                       widget="url"
+                       invisible="provider_code != 'pagotic' or not pagotic_form_url"/>
+            </field>
+        </field>
+    </record>
+
+</odoo>
