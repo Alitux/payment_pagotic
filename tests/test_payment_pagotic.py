@@ -15,7 +15,7 @@ class TestPaymentPagotic(PaymentCommon):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.currency = cls._enable_currency('ARS')
+        cls.currency = cls._prepare_currency('ARS')
         cls.provider = cls._prepare_provider(
             code='pagotic',
             update_values={
@@ -99,11 +99,10 @@ class TestPaymentPagotic(PaymentCommon):
             tx = self._create_transaction(
                 flow='redirect', reference=f'PAGOTIC-STATUS-{index}'
             )
-            tx._process('pagotic', {
+            tx._handle_notification_data('pagotic', {
                 'payment_id': f'pay_{index}',
                 'reference': tx.reference,
-                'amount': tx.amount,
-                'currency_code': tx.currency_id.name,
+                'external_transaction_id': tx.reference,
                 'status': pago_status,
                 'status_detail': 'detail',
             })
@@ -120,11 +119,10 @@ class TestPaymentPagotic(PaymentCommon):
         from pagotic import PaymentStatus
 
         tx = self._create_transaction(flow='redirect', reference='PAGOTIC-ENUM')
-        tx._process('pagotic', {
+        tx._handle_notification_data('pagotic', {
             'payment_id': 'pay_enum',
             'reference': tx.reference,
-            'amount': tx.amount,
-            'currency_code': tx.currency_id.name,
+            'external_transaction_id': tx.reference,
             'status': PaymentStatus.APPROVED,
             'status_detail': 'OK',
         })
@@ -135,18 +133,18 @@ class TestPaymentPagotic(PaymentCommon):
         """Notifications can be matched by the PagoTIC payment ID."""
         tx = self._create_transaction(flow='redirect', reference='PAGOTIC-FIND')
         tx.provider_reference = 'pay_find'
-        found_reference = self.env['payment.transaction']._extract_reference(
+        found_tx = self.env['payment.transaction']._get_tx_from_notification_data(
             'pagotic', {'payment_id': 'pay_find'}
         )
-        self.assertEqual(found_reference, tx.reference)
+        self.assertEqual(found_tx, tx)
 
     def test_find_transaction_by_reference(self):
         """Notifications can be matched by the external transaction ID."""
         tx = self._create_transaction(flow='redirect', reference='PAGOTIC-FIND-REF')
-        found_reference = self.env['payment.transaction']._extract_reference(
+        found_tx = self.env['payment.transaction']._get_tx_from_notification_data(
             'pagotic', {'external_transaction_id': 'PAGOTIC-FIND-REF'}
         )
-        self.assertEqual(found_reference, tx.reference)
+        self.assertEqual(found_tx, tx)
 
     def test_amount_validation(self):
         """A notification with a different amount is rejected."""
@@ -192,18 +190,17 @@ class TestPaymentPagotic(PaymentCommon):
         """A full refund creates a confirmed child transaction."""
         tx = self._create_transaction(flow='redirect', reference='PAGOTIC-REFUND')
         tx.provider_reference = 'pay_refund'
-        tx._process('pagotic', {
+        tx._handle_notification_data('pagotic', {
             'payment_id': 'pay_refund',
             'reference': tx.reference,
-            'amount': tx.amount,
-            'currency_code': tx.currency_id.name,
+            'external_transaction_id': tx.reference,
             'status': 'approved',
         })
 
         refund = SimpleNamespace(id='refund_1', status='approved', status_detail='OK')
         context_manager, client = self._mock_client(refund=refund)
         with patch.object(PaymentProvider, '_pagotic_get_client', return_value=context_manager):
-            refund_tx = tx._refund()
+            refund_tx = tx._send_refund_request()
 
         self.assertEqual(refund_tx.amount, -tx.amount)
         self.assertEqual(refund_tx.state, 'done')

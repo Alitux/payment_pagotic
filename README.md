@@ -1,4 +1,4 @@
-# PagoTIC para Odoo 19
+# PagoTIC para Odoo 18
 
 Módulo de pasarela de pago para [PagoTIC](https://www.pagotic.com.ar/) basado en
 el SDK oficial [`pagotic-sdk`](https://alitux.github.io/pagotic-sdk/).
@@ -12,7 +12,7 @@ Alejandro Fábrega — [alitux@disroot.org](mailto:alitux@disroot.org)
 
 ## Requisitos
 
-- Odoo 19.0.
+- Odoo 18.0.
 - Python 3.10 o superior.
 - `pagotic-sdk` (se declara en `requirements.txt`).
 - Credenciales de PagoTIC: usuario, contraseña, `client_id` y `client_secret`.
@@ -147,23 +147,20 @@ Para ejecutar las pruebas sobre una base ya instalada:
 odoo -d <base> -u payment_pagotic --test-enable --test-tags /payment_pagotic --stop-after-init
 ```
 
-## Migración a Odoo 19
+## Ramas y versiones
 
-La versión actual es `19.0.1.0.0` y la rama de trabajo es `19.0`. La rama
-`18.0` queda reservada para la implementación anterior; como todavía no se
-crearon commits, el árbol de trabajo contiene únicamente la versión 19.0.
+La versión actual es `18.0.1.0.0` y la rama de trabajo es `18.0`. La rama
+`19.0` contiene la implementación para Odoo 19, que reemplazó el procesamiento
+de notificaciones por `payment.transaction._process(provider_code, payment_data)`.
 
-El framework de pagos de Odoo 19 reemplazó el procesamiento de notificaciones
-por `payment.transaction._process(provider_code, payment_data)`. Por eso el
-módulo implementa:
+Esta rama implementa el flujo de notificaciones de Odoo 18:
 
-- `_extract_reference()` para localizar la transacción por referencia o por
-  `provider_reference`.
-- `_extract_amount_data()` para validar importe y moneda.
-- `_apply_updates()` para persistir el estado de PagoTIC y actualizar la
-  transacción.
-- `_send_refund_request()` sobre la transacción hija de devolución, que es como
-  Odoo 19 invoca las devoluciones.
+- `_get_tx_from_notification_data()` para localizar la transacción por
+  `provider_reference` o por referencia externa.
+- `_process_notification_data()` para persistir el estado de PagoTIC y
+  actualizar la transacción.
+- `_send_refund_request(amount_to_refund)` sobre la transacción original, que
+  crea la transacción hija de devolución.
 
 ## Licencia
 

@@ -58,7 +58,9 @@ class PagoticController(http.Controller):
             return self._pagotic_json_response({'status': 'rejected'})
 
         try:
-            tx._process('pagotic', tx._pagotic_payment_to_notification(payment))
+            tx._handle_notification_data(
+                'pagotic', tx._pagotic_payment_to_notification(payment)
+            )
         except Exception:
             _logger.exception("Could not process PagoTIC notification for %s", tx.reference)
             return self._pagotic_json_response({'status': 'error'}, status=500)
@@ -81,7 +83,9 @@ class PagoticController(http.Controller):
             try:
                 payment = tx.provider_id._pagotic_get_payment(tx.provider_reference)
                 tx._pagotic_validate_notification_payment(payment)
-                tx._process('pagotic', tx._pagotic_payment_to_notification(payment))
+                tx._handle_notification_data(
+                    'pagotic', tx._pagotic_payment_to_notification(payment)
+                )
             except Exception:
                 _logger.exception(
                     "Could not synchronize PagoTIC transaction %s on return", tx.reference

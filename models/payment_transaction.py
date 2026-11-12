@@ -157,53 +157,46 @@ class PaymentTransaction(models.Model):
     # === NOTIFICATION HANDLING === #
 
     @api.model
-    def _extract_reference(self, provider_code, payment_data):
-        """Return the Odoo reference matching a PagoTIC payment notification."""
+    def _get_tx_from_notification_data(self, provider_code, notification_data):
+        """Find the transaction matching a PagoTIC notification."""
+        tx = super()._get_tx_from_notification_data(provider_code, notification_data)
         if provider_code != 'pagotic':
-            return super()._extract_reference(provider_code, payment_data)
+            return tx
 
-        reference = (
-            payment_data.get('external_transaction_id')
-            or payment_data.get('reference')
-        )
-        if reference:
-            return reference
-
-        payment_id = payment_data.get('payment_id') or payment_data.get('id')
+        payment_id = notification_data.get('payment_id') or notification_data.get('id')
         if payment_id:
             tx = self.search([
                 ('provider_code', '=', 'pagotic'),
                 ('provider_reference', '=', str(payment_id)),
             ], limit=1)
             if tx:
-                return tx.reference
-        return None
+                return tx
 
-    def _extract_amount_data(self, payment_data):
-        """Return the amount and currency sent by PagoTIC for validation."""
-        if self.provider_code != 'pagotic':
-            return super()._extract_amount_data(payment_data)
-
-        amount = payment_data.get('amount')
-        currency_code = (
-            payment_data.get('currency_code')
-            or payment_data.get('currency_id')
+        reference = (
+            notification_data.get('external_transaction_id')
+            or notification_data.get('reference')
         )
-        if amount is None or not currency_code:
-            return None
-        return {
-            'amount': float(amount),
-            'currency_code': str(currency_code).upper(),
-        }
+        if reference:
+            tx = self.search([
+                ('provider_code', '=', 'pagotic'),
+                ('reference', '=', reference),
+            ], limit=1)
+            if tx:
+                return tx
 
-    def _apply_updates(self, payment_data):
-        """Update the transaction from an authoritative PagoTIC payment."""
+        raise ValidationError(_(
+            "PagoTIC: no transaction found for the notification data."
+        ))
+
+    def _process_notification_data(self, notification_data):
+        """Update the transaction from a PagoTIC notification."""
+        super()._process_notification_data(notification_data)
         if self.provider_code != 'pagotic':
-            return super()._apply_updates(payment_data)
+            return
 
-        payment_id = payment_data.get('payment_id') or payment_data.get('id')
-        status = _pagotic_status_value(payment_data.get('status'))
-        status_detail = payment_data.get('status_detail') or False
+        payment_id = notification_data.get('payment_id') or notification_data.get('id')
+        status = _pagotic_status_value(notification_data.get('status'))
+        status_detail = notification_data.get('status_detail') or False
 
         values = {}
         if payment_id:
@@ -308,7 +301,7 @@ class PaymentTransaction(models.Model):
         return None
 
     def _pagotic_payment_to_notification(self, payment):
-        """Convert an SDK Payment object into payment data for `_process`."""
+        """Convert an SDK Payment object into Odoo notification data."""
         self.ensure_one()
         amount = self._pagotic_get_payment_amount(payment)
         return {
@@ -334,42 +327,40 @@ class PaymentTransaction(models.Model):
         except ValidationError as exc:
             self._set_error(str(exc))
             raise
-        self._process('pagotic', self._pagotic_payment_to_notification(payment))
+        self._handle_notification_data(
+            'pagotic', self._pagotic_payment_to_notification(payment)
+        )
         return True
 
     # === REFUNDS === #
 
-    def _send_refund_request(self):
-        """Request a full refund from PagoTIC.
-
-        In Odoo 19 this method is called on the refund child transaction, not
-        on the source transaction.
-        """
+    def _send_refund_request(self, amount_to_refund=None):
+        """Request a full refund from PagoTIC."""
+        refund_tx = super()._send_refund_request(amount_to_refund)
         if self.provider_code != 'pagotic':
-            return super()._send_refund_request()
+            return refund_tx
 
         self.ensure_one()
         self._ensure_provider_is_not_disabled()
-        source_tx = self.source_transaction_id
-        if not source_tx:
-            raise UserError(_("The source transaction of this refund was not found."))
-        if not source_tx.provider_reference:
-            raise UserError(_("The source transaction has no PagoTIC payment ID."))
-        if self.currency_id.compare_amounts(abs(self.amount), source_tx.amount) != 0:
+        if not self.provider_reference:
+            raise UserError(_("The transaction has no PagoTIC payment ID."))
+        if self.currency_id.compare_amounts(
+            amount_to_refund or self.amount, self.amount
+        ) != 0:
             raise UserError(_("PagoTIC only supports full refunds."))
 
         response_status = None
         try:
             with self.provider_id._pagotic_get_client() as client:
                 response = client.payments.refund(
-                    source_tx.provider_reference,
+                    self.provider_reference,
                     {
                         'type': 'online',
                         'reason': _("Refund requested from Odoo"),
-                        'external_reference': self.reference,
+                        'external_reference': refund_tx.reference,
                         'metadata': {
-                            'odoo_refund_transaction_id': self.id,
-                            'odoo_source_transaction_id': source_tx.id,
+                            'odoo_refund_transaction_id': refund_tx.id,
+                            'odoo_source_transaction_id': self.id,
                         },
                     },
                 )
@@ -380,16 +371,16 @@ class PaymentTransaction(models.Model):
                 "The PagoTIC refund could not be processed: %(error)s", error=exc
             )) from exc
 
-        self.write({
-            'provider_reference': str(response.id or source_tx.provider_reference),
+        refund_tx.write({
+            'provider_reference': str(response.id or self.provider_reference),
             'pagotic_status': response_status or False,
             'pagotic_status_detail': response.status_detail or False,
         })
         message = _("PagoTIC refund status: %(status)s", status=response_status or '-')
         if response_status == 'approved':
-            self._set_done(state_message=message)
+            refund_tx._set_done(state_message=message)
         elif response_status == 'rejected':
-            self._set_error(message)
+            refund_tx._set_error(message)
         else:
-            self._set_pending(state_message=message)
-        return None
+            refund_tx._set_pending(state_message=message)
+        return refund_tx
